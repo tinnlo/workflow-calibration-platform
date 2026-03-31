@@ -1,0 +1,13 @@
+Forward Analytics
+ForwardAnalytics
+FA_SaaS
+fa_insight
+institutionId
+climateFinance
+climate_metric
+climate_target
+carbon_correction
+Blackstone
+Bridgewater
+CalPERS
+UK Finance

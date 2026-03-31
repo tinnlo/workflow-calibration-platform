@@ -1,0 +1,35 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+# SPA catch-all redirect — serve index.html for all non-asset routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# DEPLOY NOTE — API routing and CSP strategy:
+# The frontend reads VITE_API_BASE_URL (falls back to "/api" for local dev).
+# In production/staging, VITE_API_BASE_URL MUST be set at build time to the
+# fully-qualified API origin (e.g. "https://api.example.com"). The "/api"
+# fallback only works when the API server runs on the same origin, which is
+# the case in local development but NOT on Netlify.
+#
+# When VITE_API_BASE_URL is set, the Vite build auto-generates dist/_headers
+# with the correct CSP connect-src including the API origin. Netlify reads
+# _headers from the publish directory, and it takes precedence over the
+# [[headers]] block below. The static CSP below is a same-origin fallback
+# for builds without VITE_API_BASE_URL.
+#
+# If you later host the API on the same domain behind a reverse proxy, add a
+# [[redirects]] rule for "/api/*" BEFORE the SPA catch-all above.
+
+# Security headers applied to every response
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
