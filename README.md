@@ -57,8 +57,11 @@ All accounts share the password: **`Demo1234!`**
 ### Install & Run
 
 ```bash
-# Install all dependencies (root + server workspace)
+# Install frontend dependencies
 npm install
+
+# Install server dependencies
+npm install --prefix server
 
 # Start both frontend (port 5173) and API (port 3001)
 npm run dev
@@ -80,7 +83,7 @@ npm test
 
 ```bash
 # Frontend production build → dist/
-npm run build
+VITE_API_BASE_URL=https://your-api-origin.example npm run build
 
 # Server production build → server/dist/
 npm run build:server
@@ -110,21 +113,24 @@ Each entry in `GET /api/workflows/:id/audit` contains:
   "timestamp": "ISO 8601",
   "actorId": "user-id",
   "actorRole": "admin | reviewer",
-  "oldState": "draft | in_progress | submitted | completed | failed",
+  "oldState": "draft | in_progress | submitted | completed | failed | null",
   "newState": "draft | in_progress | submitted | completed | failed",
   "reason": "optional string"
 }
 ```
 
+`oldState` is `null` only on the creation entry (the workflow did not exist before).
+
 ## Architecture Notes
 
 - **RBAC enforcement**: The permission matrix lives in `server/src/services/permissions.ts`. It is checked before the state machine on every transition call.
-- **Audit log**: Append-only `Map<workflowId, AuditEntry[]>` in `server/src/services/auditStore.ts`. Entries are never mutated after insertion.
+- **Audit log**: Append-only `Map<workflowId, AuditEntry[]>` in `server/src/services/auditStore.ts`. Entries are never mutated after insertion. Both `db` and `auditStore` are atomically rolled back on transition failure.
 - **Tenant isolation on audit**: `GET /api/workflows/:id/audit` calls `store.getById` first; a wrong-org or missing workflow returns 404 before any audit data is read.
+- **ETag concurrency**: Every `PATCH` and `transition` checks `If-Match`. A stale ETag returns 412. The frontend distinguishes 412 (conflict) from 403 (permission denied) with separate toast messages.
+- **Auto-save guard**: The form wizard tracks an `isFlushing` flag. Navigation and submit buttons are disabled while a debounced save is in flight, preventing re-entrant writes or mid-save navigation.
 - **Token storage**: Access tokens are held in a module-level variable (never `localStorage`), cleared on page refresh — intentional for this demo.
 - **In-memory DB**: All data lives in a `Map<string, Workflow>` on the server, seeded with 5 workflows per organisation on startup.
 - **No refresh tokens**: The 15-minute JWT expiry is intentionally short; the demo login page makes re-authentication trivial.
-- **ETag concurrency**: Every `PATCH` and `transition` checks `If-Match`. A stale ETag returns 412. The frontend distinguishes 412 (conflict) from 403 (permission denied) with separate toast messages.
 
 ## Project Structure
 
@@ -141,10 +147,14 @@ Each entry in `GET /api/workflows/:id/audit` contains:
 │   └── types/                  # TypeScript interfaces (incl. AuditEntry)
 └── server/                     # Fastify API
     ├── src/
-    │   ├── data/               # Seed users
+    │   ├── data/               # Seed users + demo workflows
     │   ├── middleware/         # requireAuth
     │   ├── routes/             # auth, workflows (incl. audit route)
     │   ├── services/           # jwtService, stateMachine, store, permissions, auditStore
     │   └── types/              # Zod schemas + TypeScript types (incl. AuditEntry)
     └── tests/                  # Vitest unit + route tests (RBAC, audit, ETag, tenant isolation)
 ```
+
+---
+
+> Designed and built end-to-end by Xingting Luo. AI tools were used to accelerate coding, debugging, and documentation; architecture, implementation choices, and delivery ownership are mine.
