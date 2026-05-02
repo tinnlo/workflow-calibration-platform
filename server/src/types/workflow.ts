@@ -119,7 +119,7 @@ export interface AuditEntry {
   timestamp: string
   actorId: string
   actorRole: 'admin' | 'reviewer'
-  oldState: WorkflowStatus
+  oldState: WorkflowStatus | null
   newState: WorkflowStatus
   reason?: string
 }

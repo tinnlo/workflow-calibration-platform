@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const serverRoot = resolve(__dirname, '..')
 const workspaceRoot = resolve(serverRoot, '..')
-const tsx = resolve(workspaceRoot, 'node_modules', '.bin', 'tsx')
+const tsx = resolve(serverRoot, 'node_modules', '.bin', 'tsx')
 const probe = resolve(__dirname, 'config.probe.ts')
 
 /**
