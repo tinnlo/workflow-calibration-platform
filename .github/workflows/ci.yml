@@ -23,10 +23,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          NODE_ENV: development
 
       - name: Install server dependencies
         run: npm ci
         working-directory: server
+        env:
+          NODE_ENV: development
+
+      - name: Debug node_modules
+        run: |
+          echo "=== @types present ==="
+          ls node_modules/@types/ 2>/dev/null | head -20 || echo "no @types dir"
+          echo "=== react present ==="
+          ls node_modules/react/index.js 2>/dev/null && echo "react OK" || echo "react MISSING"
+          echo "=== @types/react present ==="
+          ls node_modules/@types/react/index.d.ts 2>/dev/null && echo "@types/react OK" || echo "@types/react MISSING"
 
       - name: Sanitization check
         run: |
