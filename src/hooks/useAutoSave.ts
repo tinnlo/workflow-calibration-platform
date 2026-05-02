@@ -143,7 +143,11 @@ export function useAutoSave({ workflowId, etag, enabled = true, onConflict }: Us
     const firedForWorkflow = workflowIdRef.current
     inFlightRef.current = true
 
-    const p = (async () => {
+    // Declare p before the IIFE so the finally closure can reference it
+    // without triggering TS2454 "used before assigned".
+    let p: Promise<void> = Promise.resolve()
+
+    p = (async () => {
       try {
         const updated: Workflow = await mutateAsyncRef.current({
           id: firedForWorkflow,
