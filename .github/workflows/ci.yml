@@ -26,26 +26,22 @@ jobs:
         env:
           NODE_ENV: development
 
+      - name: Debug after root install
+        run: |
+          echo "root node_modules count: $(ls node_modules | wc -l)"
+          ls node_modules/react 2>/dev/null && echo "react OK" || echo "react MISSING after root install"
+
       - name: Install server dependencies
         run: npm ci
         working-directory: server
         env:
           NODE_ENV: development
 
-      - name: Debug node_modules
+      - name: Debug after server install
         run: |
-          echo "=== pwd ==="
-          pwd
-          echo "=== root node_modules exists ==="
-          ls -la | grep node_modules || echo "NO root node_modules"
-          echo "=== root @types ==="
-          ls node_modules/@types/ 2>/dev/null | head -20 || echo "no @types in root"
-          echo "=== react present ==="
-          ls node_modules/react/index.js 2>/dev/null && echo "react OK" || echo "react MISSING"
-          echo "=== @types/react present ==="
+          echo "root node_modules count: $(ls node_modules | wc -l)"
+          ls node_modules/react 2>/dev/null && echo "react OK" || echo "react MISSING after server install"
           ls node_modules/@types/react/index.d.ts 2>/dev/null && echo "@types/react OK" || echo "@types/react MISSING"
-          echo "=== npm ci output check ==="
-          npm ci --dry-run 2>&1 | head -5 || true
 
       - name: Sanitization check
         run: |
