@@ -3,9 +3,6 @@
     "private": true,
     "version": "0.0.0",
     "type": "module",
-    "workspaces": [
-        "server"
-    ],
     "scripts": {
         "dev": "concurrently -n fe,be -c cyan,green \"vite\" \"npm run dev --workspace=server\"",
         "build": "tsc -b && vite build",
