@@ -24,6 +24,13 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+// AuthProvider now calls useQueryClient(); stub it so tests don't need a real
+// QueryClientProvider wrapper. clear() just needs to be callable.
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>()
+  return { ...actual, useQueryClient: () => ({ clear: vi.fn() }) }
+})
+
 import { isAuthenticated, fetchMe, login as doLogin } from '@/services/authService'
 
 const mockIsAuthenticated = isAuthenticated as ReturnType<typeof vi.fn>
@@ -100,6 +107,22 @@ describe('AuthProvider', () => {
 
     await act(async () => { screen.getByText('login').click() })
     expect(screen.getByText('logged-in:u1')).toBeInTheDocument()
+  })
+
+  it('auth:expired event clears user state', async () => {
+    mockIsAuthenticated.mockReturnValue(true)
+    mockFetchMe.mockResolvedValue(MOCK_USER)
+
+    await act(async () => {
+      render(<MemoryRouter><AuthProvider><TestChild /></AuthProvider></MemoryRouter>)
+    })
+    expect(screen.getByText('user:u1')).toBeInTheDocument()
+
+    // Simulate token expiry detected by apiFetch
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('auth:expired'))
+    })
+    expect(screen.getByText('no-user')).toBeInTheDocument()
   })
 
   it('useAuth throws when used outside AuthProvider', async () => {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -17,15 +17,17 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 interface Step1FormProps {
+  workflowId: string
   defaultValues?: Step1Data
   readOnly?: boolean
   onChange: (data: Step1Data) => void
 }
 
-export function Step1Form({ defaultValues, readOnly, onChange }: Step1FormProps) {
+export function Step1Form({ workflowId, defaultValues, readOnly, onChange }: Step1FormProps) {
   const {
     register,
     watch,
+    reset,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -33,9 +35,24 @@ export function Step1Form({ defaultValues, readOnly, onChange }: Step1FormProps)
     mode: 'onChange',
   })
 
+  // Guard that prevents the watch() → onChange effect from firing during a
+  // programmatic reset(). Without this, resetting to server data after a
+  // conflict would immediately re-schedule an autosave of that server data.
+  const resettingRef = useRef(false)
+
+  // When workflowId changes (navigation) or defaultValues change (conflict
+  // refetch) reset the form so users see the correct workflow's server state.
+  useEffect(() => {
+    resettingRef.current = true
+    reset(defaultValues ?? {})
+    Promise.resolve().then(() => { resettingRef.current = false })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId, JSON.stringify(defaultValues)])
+
   const values = watch()
 
   useEffect(() => {
+    if (resettingRef.current) return
     const { organizationName, contactName, contactEmail, reportingPeriod } = values
     if (organizationName && contactName && contactEmail && reportingPeriod) {
       onChange(values as Step1Data)

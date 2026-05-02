@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -34,6 +34,7 @@ export function Step4Form({ workflow, readOnly, onChange }: Step4FormProps) {
   const {
     register,
     watch,
+    reset,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -43,7 +44,22 @@ export function Step4Form({ workflow, readOnly, onChange }: Step4FormProps) {
 
   const values = watch()
 
+  // Guard that prevents the watch() → onChange effect from firing during a
+  // programmatic reset(). Without this, resetting to server data after a
+  // conflict would immediately re-schedule an autosave of that server data.
+  const resettingRef = useRef(false)
+
+  // When workflow.id changes (navigation) or step4Data changes (conflict
+  // refetch) reset the form so users see the correct workflow's server state.
   useEffect(() => {
+    resettingRef.current = true
+    reset(workflow.step4Data ?? { confirmAccuracy: false, submitterName: '' })
+    Promise.resolve().then(() => { resettingRef.current = false })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflow.id, JSON.stringify(workflow.step4Data)])
+
+  useEffect(() => {
+    if (resettingRef.current) return
     onChange(values as Step4Data)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(values)])

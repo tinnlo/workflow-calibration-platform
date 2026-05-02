@@ -92,3 +92,26 @@ export interface TransitionWorkflowInput {
   status: WorkflowStatus
   reason?: string
 }
+
+// ─── Audit ────────────────────────────────────────────────────────────────────
+
+/**
+ * Audit entry as returned by the server.
+ * Admins receive correlationId and actorId; reviewers receive a redacted
+ * view where those fields are absent. Both shapes satisfy this interface
+ * because the sensitive fields are optional here — the server enforces what
+ * is actually populated per role.
+ */
+export interface AuditEntry {
+  /** Only present for admin callers */
+  correlationId?: string
+  workflowId: string
+  timestamp: string
+  /** Only present for admin callers */
+  actorId?: string
+  actorRole: 'admin' | 'reviewer'
+  /** null for the initial creation entry (no prior state) */
+  oldState: WorkflowStatus | null
+  newState: WorkflowStatus
+  reason?: string
+}

@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import { type Workflow, type WorkflowStatus, type UpdateWorkflowInput } from '@/types/workflow.js'
 import { validateTransition } from '@/services/stateMachine.js'
+import { appendAuditEntry, getAuditLog, restoreAuditLog, reset as resetAudit } from '@/services/auditStore.js'
+import { assertTransitionPermission } from '@/services/permissions.js'
 import { NotFoundError, PreconditionFailedError, PreconditionRequiredError, UnprocessableEntityError } from '@/errors.js'
 import { SEED_USERS } from '@/data/seed.js'
 
@@ -39,6 +41,7 @@ export function getById(id: string, organizationId: string): Workflow {
 export function create(
   organizationId: string,
   createdBy: string,
+  createdByRole: 'admin' | 'reviewer',
   title: string,
   description: string
 ): Workflow {
@@ -62,6 +65,19 @@ export function create(
     createdBy,
   }
   db.set(id, workflow)
+
+  // Emit an audit entry for creation so the trail is complete from day zero:
+  // actor, initial 'draft' state, and timestamp are all forensically recorded.
+  appendAuditEntry({
+    correlationId: randomUUID(),
+    workflowId: id,
+    timestamp: ts,
+    actorId: createdBy,
+    actorRole: createdByRole,
+    oldState: null,
+    newState: 'draft',
+  })
+
   return workflow
 }
 
@@ -108,6 +124,8 @@ export function transition(
   organizationId: string,
   ifMatchETag: string | undefined,
   to: WorkflowStatus,
+  actorId: string,
+  actorRole: 'admin' | 'reviewer',
   reason?: string
 ): Workflow {
   const workflow = getById(id, organizationId)
@@ -122,6 +140,10 @@ export function transition(
   // throws 422 if invalid
   validateTransition(workflow.status, to)
 
+  // Defense-in-depth: enforce RBAC inside the service layer so that any
+  // future internal caller cannot bypass the route-layer permission check.
+  assertTransitionPermission(actorRole, workflow.status, to)
+
   const ts = now()
   const updated: Workflow = {
     ...workflow,
@@ -133,7 +155,32 @@ export function transition(
       { from: workflow.status, to, timestamp: ts, ...(reason ? { reason } : {}) },
     ],
   }
+
+  // Snapshot both stores before any write so we can roll back atomically.
+  const priorAuditSnapshot = getAuditLog(id)
+
+  // Commit workflow and audit entry atomically: write the workflow first, then
+  // the audit entry. If the audit append throws (should never happen in-memory,
+  // but guards against future changes), roll both stores back to their prior
+  // state so they remain consistent.
   db.set(id, updated)
+  try {
+    appendAuditEntry({
+      correlationId: randomUUID(),
+      workflowId: id,
+      timestamp: ts,
+      actorId,
+      actorRole,
+      oldState: workflow.status,
+      newState: to,
+      ...(reason ? { reason } : {}),
+    })
+  } catch (err) {
+    db.set(id, workflow)                          // rollback workflow
+    restoreAuditLog(id, priorAuditSnapshot)       // rollback audit
+    throw err
+  }
+
   return updated
 }
 
@@ -155,22 +202,34 @@ export function seedWorkflows(): void {
       const workflow = create(
         org.orgId,
         org.adminId,
+        'admin',
         `${org.name} — ${periods[i]} Calibration`,
         `Automated seed workflow for ${periods[i]}`
       )
 
-      // Advance through states as needed
+      // Advance through states, emitting audit entries for each hop so that
+      // the audit trail is complete from the very start — no partial history.
       const path: WorkflowStatus[] = buildPath(targetStatus)
       for (let j = 1; j < path.length; j++) {
         const w = db.get(workflow.id)!
         const ts = now()
+        const prev = path[j - 1]
         const next = path[j]
         db.set(workflow.id, {
           ...w,
           status: next,
           version: w.version + 1,
           updatedAt: ts,
-          statusHistory: [...w.statusHistory, { from: path[j - 1], to: next, timestamp: ts }],
+          statusHistory: [...w.statusHistory, { from: prev, to: next, timestamp: ts }],
+        })
+        appendAuditEntry({
+          correlationId: randomUUID(),
+          workflowId: workflow.id,
+          timestamp: ts,
+          actorId: org.adminId,
+          actorRole: 'admin',
+          oldState: prev,
+          newState: next,
         })
       }
     }
@@ -190,6 +249,7 @@ function buildPath(target: WorkflowStatus): WorkflowStatus[] {
 
 export function reset(): void {
   db.clear()
+  resetAudit()
 }
 
 // Run seed on module load so it is available when the server starts

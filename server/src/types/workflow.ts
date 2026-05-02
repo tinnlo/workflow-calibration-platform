@@ -106,6 +106,31 @@ export const TransitionWorkflowSchema = z.object({
 })
 export type TransitionWorkflowInput = z.infer<typeof TransitionWorkflowSchema>
 
+// ─── Audit ────────────────────────────────────────────────────────────────────
+
+/**
+ * Immutable record of a single workflow state transition.
+ * Entries are append-only for the lifetime of the in-memory process.
+ */
+export interface AuditEntry {
+  /** Unique identifier for this audit record */
+  correlationId: string
+  workflowId: string
+  timestamp: string
+  actorId: string
+  actorRole: 'admin' | 'reviewer'
+  oldState: WorkflowStatus
+  newState: WorkflowStatus
+  reason?: string
+}
+
+/**
+ * Redacted audit entry returned to non-admin callers.
+ * Strips internal identifiers (actorId, correlationId) that reviewers
+ * have no operational need to see.
+ */
+export type PublicAuditEntry = Omit<AuditEntry, 'actorId' | 'correlationId'>
+
 // ─── Auth input schemas ───────────────────────────────────────────────────────
 
 export const LoginSchema = z.object({

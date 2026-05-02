@@ -22,7 +22,9 @@ interface FetchOptions extends Omit<RequestInit, 'body'> {
  * - Attaches Bearer token from in-memory authService
  * - Sets Content-Type: application/json for requests with a body
  * - Sends If-Match header when etag is provided
- * - On 401: clears the token (session expired) so ProtectedRoute redirects
+ * - On 401: clears the token and fires an 'auth:expired' CustomEvent so that
+ *   AuthContext can tear down user state and the React Query cache in one place,
+ *   after which ProtectedRoute will redirect to /login on the next render cycle.
  * - Throws ApiError (wrapping RFC 7807 problem detail) on non-2xx responses
  */
 export async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T> {
@@ -65,10 +67,12 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
       }
     }
 
-    // 401 means the token expired or is invalid — clear it so the ProtectedRoute
-    // will redirect to /login on the next render cycle.
+    // 401 means the token expired or is invalid. Clear the stored token and
+    // fire a custom event so AuthContext can reset user state + query cache in
+    // one place without apiFetch needing a direct reference to either.
     if (response.status === 401 && path !== '/auth/login') {
       logout()
+      window.dispatchEvent(new CustomEvent('auth:expired'))
     }
 
     throw new ApiError(problem)

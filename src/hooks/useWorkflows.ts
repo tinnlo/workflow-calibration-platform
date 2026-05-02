@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/services/api'
-import type { Workflow, CreateWorkflowInput, UpdateWorkflowInput, TransitionWorkflowInput } from '@/types/workflow'
+import type { Workflow, AuditEntry, CreateWorkflowInput, UpdateWorkflowInput, TransitionWorkflowInput } from '@/types/workflow'
 
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 export const workflowKeys = {
   all: ['workflows'] as const,
   detail: (id: string) => ['workflows', id] as const,
+  audit: (id: string) => ['workflows', id, 'audit'] as const,
 }
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
@@ -71,6 +72,16 @@ export function useTransitionWorkflow() {
     onSuccess: (updated) => {
       qc.setQueryData(workflowKeys.detail(updated.id), updated)
       qc.invalidateQueries({ queryKey: workflowKeys.all })
+      // Invalidate audit log so it refreshes after each transition
+      qc.invalidateQueries({ queryKey: workflowKeys.audit(updated.id) })
     },
+  })
+}
+
+export function useAuditLog(workflowId: string) {
+  return useQuery<AuditEntry[]>({
+    queryKey: workflowKeys.audit(workflowId),
+    queryFn: () => apiFetch<AuditEntry[]>(`/workflows/${workflowId}/audit`),
+    enabled: !!workflowId,
   })
 }

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -24,16 +24,18 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 interface Step2FormProps {
+  workflowId: string
   defaultValues?: Step2Data
   readOnly?: boolean
   onChange: (data: Step2Data) => void
 }
 
-export function Step2Form({ defaultValues, readOnly, onChange }: Step2FormProps) {
+export function Step2Form({ workflowId, defaultValues, readOnly, onChange }: Step2FormProps) {
   const {
     register,
     control,
     watch,
+    reset,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -44,7 +46,22 @@ export function Step2Form({ defaultValues, readOnly, onChange }: Step2FormProps)
   const { fields, append, remove } = useFieldArray({ control, name: 'dataPoints' })
   const values = watch()
 
+  // Guard that prevents the watch() → onChange effect from firing during a
+  // programmatic reset(). Without this, resetting to server data after a
+  // conflict would immediately re-schedule an autosave of that server data.
+  const resettingRef = useRef(false)
+
+  // When workflowId changes (navigation) or defaultValues change (conflict
+  // refetch) reset the form so users see the correct workflow's server state.
   useEffect(() => {
+    resettingRef.current = true
+    reset({ dataPoints: defaultValues?.dataPoints ?? [] })
+    Promise.resolve().then(() => { resettingRef.current = false })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId, JSON.stringify(defaultValues)])
+
+  useEffect(() => {
+    if (resettingRef.current) return
     onChange({ dataPoints: values.dataPoints as Step2Data['dataPoints'] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(values.dataPoints)])

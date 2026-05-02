@@ -64,18 +64,28 @@ describe('apiFetch', () => {
     await expect(apiFetch('/workflows')).rejects.toBeInstanceOf(ApiError)
   })
 
-  it('calls logout on 401 for non-login paths', async () => {
+  it('calls logout and dispatches auth:expired on 401 for non-login paths', async () => {
     const problem = { type: 'test', title: 'Unauth', status: 401, detail: 'Expired' }
     mockFetch(401, problem)
+    const events: Event[] = []
+    const listener = (e: Event) => events.push(e)
+    window.addEventListener('auth:expired', listener)
     await expect(apiFetch('/workflows')).rejects.toBeInstanceOf(ApiError)
+    window.removeEventListener('auth:expired', listener)
     expect(mockLogout).toHaveBeenCalled()
+    expect(events).toHaveLength(1)
   })
 
-  it('does NOT call logout on 401 for /auth/login path', async () => {
+  it('does NOT call logout or dispatch auth:expired on 401 for /auth/login path', async () => {
     const problem = { type: 'test', title: 'Unauth', status: 401, detail: 'Bad creds' }
     mockFetch(401, problem)
+    const events: Event[] = []
+    const listener = (e: Event) => events.push(e)
+    window.addEventListener('auth:expired', listener)
     await expect(apiFetch('/auth/login', { method: 'POST', body: {} })).rejects.toBeInstanceOf(ApiError)
+    window.removeEventListener('auth:expired', listener)
     expect(mockLogout).not.toHaveBeenCalled()
+    expect(events).toHaveLength(0)
   })
 
   it('returns undefined for 204 No Content', async () => {

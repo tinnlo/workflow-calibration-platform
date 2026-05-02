@@ -287,7 +287,7 @@ describe('POST /api/workflows/:id/transition', () => {
     expect(res.json<{ status: string }>().status).toBe('in_progress')
   })
 
-  it('returns 422 for invalid transition (draft → completed)', async () => {
+  it('returns 422 for invalid state-machine transition (draft → completed)', async () => {
     const token = makeToken()
     const created = await app.inject({
       method: 'POST',
@@ -501,5 +501,396 @@ describe('POST /api/test/reset', () => {
       url: '/api/test/reset',
     })
     expect(res.statusCode).toBe(404)
+  })
+})
+
+// ── RBAC: transition permission enforcement ────────────────────────────────────
+
+describe('RBAC — reviewer blocked from admin-only transitions', () => {
+  /** Helper: advance a workflow to a target status using admin tokens */
+  async function advanceToSubmitted(adminToken: string): Promise<{ id: string; etag: string }> {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(adminToken),
+      payload: { title: 'RBAC Test Workflow' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': 'W/"1"' },
+      payload: { status: 'in_progress' },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': 'W/"2"' },
+      payload: { status: 'submitted' },
+    })
+    return { id, etag: 'W/"3"' }
+  }
+
+  it('reviewer is blocked from submitted → completed (403)', async () => {
+    const adminToken = makeToken()
+    const reviewerToken = makeToken({ sub: 'user-aa-reviewer', role: 'reviewer', email: 'reviewer@apex.example', name: 'Aaron Reviewer' })
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': etag },
+      payload: { status: 'completed' },
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('reviewer is blocked from submitted → failed (403)', async () => {
+    const adminToken = makeToken()
+    const reviewerToken = makeToken({ sub: 'user-aa-reviewer', role: 'reviewer', email: 'reviewer@apex.example', name: 'Aaron Reviewer' })
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': etag },
+      payload: { status: 'failed' },
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('reviewer is blocked from failed → draft (403)', async () => {
+    const adminToken = makeToken()
+    const reviewerToken = makeToken({ sub: 'user-aa-reviewer', role: 'reviewer', email: 'reviewer@apex.example', name: 'Aaron Reviewer' })
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    // Admin fails it first
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': etag },
+      payload: { status: 'failed' },
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': 'W/"4"' },
+      payload: { status: 'draft' },
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('admin is allowed to perform submitted → completed (200)', async () => {
+    const adminToken = makeToken()
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': etag },
+      payload: { status: 'completed' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<{ status: string }>().status).toBe('completed')
+  })
+
+  it('admin is allowed to perform submitted → failed (200)', async () => {
+    const adminToken = makeToken()
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': etag },
+      payload: { status: 'failed' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<{ status: string }>().status).toBe('failed')
+  })
+
+  it('admin is allowed to perform failed → draft (recovery)', async () => {
+    const adminToken = makeToken()
+    const { id, etag } = await advanceToSubmitted(adminToken)
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': etag },
+      payload: { status: 'failed' },
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': 'W/"4"' },
+      payload: { status: 'draft' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<{ status: string }>().status).toBe('draft')
+  })
+
+  it('reviewer is allowed to perform draft → in_progress (200)', async () => {
+    const reviewerToken = makeToken({ sub: 'user-aa-reviewer', role: 'reviewer', email: 'reviewer@apex.example', name: 'Aaron Reviewer' })
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(reviewerToken),
+      payload: { title: 'Reviewer Start Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+    const etag = created.headers['etag'] as string
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': etag },
+      payload: { status: 'in_progress' },
+    })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('reviewer is allowed to perform in_progress → submitted (200)', async () => {
+    const reviewerToken = makeToken({ sub: 'user-aa-reviewer', role: 'reviewer', email: 'reviewer@apex.example', name: 'Aaron Reviewer' })
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(reviewerToken),
+      payload: { title: 'Reviewer Submit Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': 'W/"1"' },
+      payload: { status: 'in_progress' },
+    })
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(reviewerToken), 'if-match': 'W/"2"' },
+      payload: { status: 'submitted' },
+    })
+    expect(res.statusCode).toBe(200)
+  })
+})
+
+// ── Audit trail ──────────────────────────────────────────────────────────────
+
+describe('GET /api/workflows/:id/audit', () => {
+  it('returns 401 without auth', async () => {
+    const token = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(token),
+      payload: { title: 'Audit Auth Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    const res = await app.inject({ method: 'GET', url: `/api/workflows/${id}/audit` })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('returns 404 for wrong-org (tenant isolation)', async () => {
+    const apexToken = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(apexToken),
+      payload: { title: 'Apex Audit Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    const beaconToken = makeToken({ sub: 'user-bd-admin', organizationId: 'org-beacon', email: 'admin@beacon.example' })
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(beaconToken),
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('returns a creation entry for a workflow with no API transitions', async () => {
+    const token = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(token),
+      payload: { title: 'No Transitions Yet' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(token),
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['cache-control']).toBe('private, no-store')
+    expect(res.headers['vary']).toBe('Authorization')
+    const entries = res.json<unknown[]>()
+    expect(entries).toHaveLength(1)
+    // Creation entry: null → draft
+    expect(entries[0]).toMatchObject({ oldState: null, newState: 'draft' })
+  })
+
+  it('returns ordered entries after transitions', async () => {
+    const token = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(token),
+      payload: { title: 'Audit Sequence Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(token), 'if-match': 'W/"1"' },
+      payload: { status: 'in_progress' },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(token), 'if-match': 'W/"2"' },
+      payload: { status: 'submitted' },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(token),
+    })
+    expect(res.statusCode).toBe(200)
+    const entries = res.json<Array<{ oldState: string | null; newState: string }>>()
+    expect(entries).toHaveLength(3)
+    expect(entries[0].oldState).toBe(null)
+    expect(entries[0].newState).toBe('draft')
+    expect(entries[1].oldState).toBe('draft')
+    expect(entries[1].newState).toBe('in_progress')
+    expect(entries[2].oldState).toBe('in_progress')
+    expect(entries[2].newState).toBe('submitted')
+  })
+
+  it('each entry contains all required fields', async () => {
+    const token = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(token),
+      payload: { title: 'Audit Fields Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(token), 'if-match': 'W/"1"' },
+      payload: { status: 'in_progress', reason: 'Starting work' },
+    })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(token),
+    })
+    const entries = res.json<Array<Record<string, unknown>>>()
+    expect(entries).toHaveLength(2)
+
+    // entries[0] is the creation entry; entries[1] is the transition we just made
+    const entry = entries[1]
+    expect(typeof entry.correlationId).toBe('string')
+    expect(entry.correlationId).toMatch(/^[0-9a-f-]{36}$/) // UUID
+    expect(entry.workflowId).toBe(id)
+    expect(typeof entry.timestamp).toBe('string')
+    expect(entry.actorId).toBe('user-aa-admin')
+    expect(entry.actorRole).toBe('admin')
+    expect(entry.oldState).toBe('draft')
+    expect(entry.newState).toBe('in_progress')
+    expect(entry.reason).toBe('Starting work')
+  })
+
+  it('audit log captures the submitted → failed → draft recovery path', async () => {
+    const token = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(token),
+      payload: { title: 'Recovery Audit Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    for (const [etag, status] of [['W/"1"', 'in_progress'], ['W/"2"', 'submitted'], ['W/"3"', 'failed'], ['W/"4"', 'draft']] as const) {
+      await app.inject({
+        method: 'POST',
+        url: `/api/workflows/${id}/transition`,
+        headers: { ...authHeader(token), 'if-match': etag },
+        payload: { status },
+      })
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(token),
+    })
+    const entries = res.json<Array<{ oldState: string | null; newState: string }>>()
+    expect(entries).toHaveLength(5)
+    // entries[0] is the creation entry (null → draft)
+    expect(entries[3].oldState).toBe('submitted')
+    expect(entries[3].newState).toBe('failed')
+    expect(entries[4].oldState).toBe('failed')
+    expect(entries[4].newState).toBe('draft')
+  })
+
+  it('reviewer receives redacted entries (no actorId, no correlationId)', async () => {
+    const adminToken = makeToken()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      headers: authHeader(adminToken),
+      payload: { title: 'Redaction Test' },
+    })
+    const { id } = created.json<{ id: string }>()
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${id}/transition`,
+      headers: { ...authHeader(adminToken), 'if-match': 'W/"1"' },
+      payload: { status: 'in_progress', reason: 'review starts' },
+    })
+
+    const reviewerToken = makeToken({
+      sub: 'user-aa-reviewer',
+      email: 'reviewer@apex.example',
+      name: 'Rex Reviewer',
+      role: 'reviewer',
+    })
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/workflows/${id}/audit`,
+      headers: authHeader(reviewerToken),
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['cache-control']).toBe('private, no-store')
+    expect(res.headers['vary']).toBe('Authorization')
+
+    const entries = res.json<Array<Record<string, unknown>>>()
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+    for (const entry of entries) {
+      expect(entry).not.toHaveProperty('actorId')
+      expect(entry).not.toHaveProperty('correlationId')
+      // Public fields must be present
+      expect(entry).toHaveProperty('workflowId')
+      expect(entry).toHaveProperty('timestamp')
+      expect(entry).toHaveProperty('actorRole')
+      expect(entry).toHaveProperty('oldState')
+      expect(entry).toHaveProperty('newState')
+    }
   })
 })
